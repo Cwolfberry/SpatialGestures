@@ -2,6 +2,7 @@ import Foundation
 import RealityKit
 import SwiftUI
 import Combine
+import ARKit
 
 /// AR手势类型枚举
 public enum SpatialGestureType {
@@ -13,6 +14,8 @@ public enum SpatialGestureType {
     case scale
     /// 手势结束
     case gestureEnded
+    /// 放置手势
+    case placement
 }
 
 /// 手势回调信息结构
@@ -48,6 +51,7 @@ public struct SpatialGestureInfo {
 public typealias SpatialGestureCallback = (SpatialGestureInfo) -> Void
 
 /// 空间手势管理器，负责管理实体和手势交互
+@MainActor
 public class SpatialGestureManager: ObservableObject {
     /// 活跃的实体列表
     @Published public var entities: [EntityData] = []
@@ -67,35 +71,138 @@ public class SpatialGestureManager: ObservableObject {
     /// 手势回调
     public var onGestureCallback: SpatialGestureCallback?
     
+    /// 平面检测管理器
+    public var meshDetectionManager: MeshDetectionManager?
+    
+    /// enable mesh detection
+    @Published public var isMeshDetectionEnabled: Bool = false
+    
+    /// placement status changed callback
+    public var onPlacementStatusChanged: ((String, Bool, SIMD3<Float>?) -> Void)?
+
+    // rotation axis
+    public var rotationAxis: RotationAxis3D? = nil
+    
     /// 初始化空间手势管理器
     /// - Parameters:
     ///   - referenceAnchor: 可选参考锚点
+    ///   - enableMeshDetection: 是否启用平面检测，默认为false
+    ///   - showDebugVisualization: 是否显示平面检测可视化，默认为false
     ///   - isDebugEnabled: 是否启用调试模式，默认为false
+    @MainActor
     public init(
-        referenceAnchor: Entity? = nil, 
-        isDebugEnabled: Bool = false
+        referenceAnchor: Entity? = nil,
+        enableMeshDetection: Bool = false,
+        showDebugVisualization: Bool = false,
+        isDebugEnabled: Bool = false,
+        rotationAxis: RotationAxis3D? = nil
     ) {
         self.referenceAnchor = referenceAnchor
         self.isDebugEnabled = isDebugEnabled
+        self.rotationAxis = rotationAxis
+        
+        if enableMeshDetection {
+            meshDetectionManager = MeshDetectionManager(
+                showDebugVisualization: showDebugVisualization,
+                isDebugEnabled: isDebugEnabled
+            )
+        }
+    }
+    /// start mesh detection
+    /// - Parameters:
+    public func startMeshDetection(
+        rootEntity: Entity
+    ) async {
+        guard let manager = meshDetectionManager else {
+            if isDebugEnabled {
+                print("Mesh detection manager not initialized. Call setupMeshDetection first.")
+            }
+            return
+        }
+        
+        manager.rootEntity = rootEntity
+        await manager.startMeshDetection()
+        isMeshDetectionEnabled = true
+        
+        if isDebugEnabled {
+            print("Mesh detection started")
+        }
     }
     
-    /// 添加实体到管理器
+    /// 停止平面检测
+    public func stopMeshDetection() async {
+        guard let manager = meshDetectionManager else { return }
+        
+        await manager.stopMeshDetection()
+        isMeshDetectionEnabled = false
+        
+        if isDebugEnabled {
+            print("Mesh detection stopped")
+        }
+    }
+    
+    /// set placement status changed callback
+    /// - Parameter callback: callback function (entityName, canPlace, position)
+    public func setPlacementStatusCallback(_ callback: @escaping (String, Bool, SIMD3<Float>?) -> Void) {
+        self.onPlacementStatusChanged = callback
+    }
+    
+    /// check if entity can be placed at current position
     /// - Parameters:
-    ///   - entity: 要添加的实体
-    ///   - name: 实体名称
-    /// - Returns: 添加的实体数据
+    ///   - entityName: entity name
+    ///   - maxDistance: maximum valid distance
+    /// - Returns: if can be placed
+    @MainActor
+    public func checkEntityPlacement(entity: Entity, maxDistance: Float = 0.3, hitPosition: SIMD3<Float>, hitDistance: Float) -> Bool {
+        
+        let canPlace = meshDetectionManager?.checkEntityPlacement(entity: entity, maxDistance: maxDistance, hitPosition: hitPosition, hitDistance: hitDistance) ?? false
+        
+        return canPlace
+    }
+    
+    /// place entity to current valid position
+    /// - Parameter entityName: entity name
+    /// - Returns: if placed successfully
     @discardableResult
     @MainActor
-    public func addEntity(_ entity: Entity, name: String) async -> EntityData {
+    public func placeEntity(entity: Entity, entityName: String) -> Bool {
+        guard let manager = meshDetectionManager else {
+            return false
+        }
+        
+        let success = manager.placeEntity(entity)
+        
+        if success {
+            // Notify about placement if callbacks are set
+            notifyGestureEvent(SpatialGestureInfo(
+                gestureType: .placement,
+                entityName: entityName,
+                transform: entity.transform
+            ))
+        }
+        
+        return success
+    }
+    
+    /// add entity to manager
+    /// - Parameters:
+    ///   - entity: entity to add
+    ///   - name: entity name
+    /// - Returns: added entity data
+    @discardableResult
+    @MainActor
+    public func addEntity(
+        _ entity: Entity,
+        name: String
+    ) async -> EntityData {
         let entityData = EntityData(entity: entity, name: name)
         entityMap[name] = entityData
         entities.append(entityData)
         
-        // 指定Entity为输入目标！！！
+        // specify entity as input target
         entity.components[InputTargetComponent.self] = InputTargetComponent(allowedInputTypes: .all)
-        // 设置碰撞体积。 这两步操作也可以在 Reality Composer中进行
+        // set collision volume
         await entity.generateCollisionShapes(recursive: true)
-        
         
         if isDebugEnabled {
             print("[Entity Registered]: \(name)")
@@ -104,16 +211,16 @@ public class SpatialGestureManager: ObservableObject {
         return entityData
     }
     
-    /// 根据交互实体查找主实体
-    /// - Parameter interactedEntity: 被交互的实体
-    /// - Returns: 找到的实体数据和名称
+    /// find main entity from interacted entity
+    /// - Parameter interactedEntity: interacted entity
+    /// - Returns: found entity data and name
     @MainActor public func findEntityData(from interactedEntity: Entity) -> (EntityData?, String) {
-        // 首先尝试直接匹配
+        // try to match directly
         for entData in entities {
             let entity = entData.entity
             let name = entData.name
             
-            // 检查是否是主实体
+            // check if it is the main entity
             if entity == interactedEntity {
                 return (entData, name)
             }
@@ -216,6 +323,8 @@ public class SpatialGestureManager: ObservableObject {
             return "Magnify"
         case .gestureEnded:
             return "Gesture Ended"
+        case .placement:
+            return "Placement"
         }
     }
     
@@ -242,6 +351,8 @@ public class SpatialGestureManager: ObservableObject {
             }
         case .gestureEnded:
             result += "position: \(info.transform.translation) rotation: \(info.transform.rotation.convertToEulerAngles()) scale: \(info.transform.scale)"
+        case .placement:
+            result += "position: \(info.transform.translation)"
         }
         
         return result
@@ -249,7 +360,17 @@ public class SpatialGestureManager: ObservableObject {
     
     /// 启用或禁用调试模式
     /// - Parameter enabled: 是否启用调试
+    @MainActor
     public func setDebugEnabled(_ enabled: Bool) {
         self.isDebugEnabled = enabled
+        
+        meshDetectionManager?.isDebugEnabled = enabled
+    }
+    
+    /// 显示或隐藏平面检测可视化
+    /// - Parameter show: 是否显示
+    @MainActor
+    public func setMeshDetectionVisualization(_ show: Bool) {
+        meshDetectionManager?.setMeshDetectionVisualization(show)
     }
 } 

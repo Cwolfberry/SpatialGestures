@@ -16,12 +16,10 @@ SpatialGestures is a Swift package that provides simple yet powerful gesture han
 - **Drag**: Move 3D objects in space
 - **Rotate**: Rotate 3D objects (with customizable rotation axes)
 - **Scale**: Resize 3D objects
+- **Mesh Detection**: Place objects on detected surfaces with placement verification
 - **Gesture Callbacks**: Monitor gesture events and get transformation data
 - **Debug Mode**: Get detailed gesture information during development
 - **Customizable Rotation**: Specify rotation axes or disable rotation entirely
-
-## Todo:
-- **Plane Detection**: Place objects on detected surfaces
 
 
 ## Requirements
@@ -58,19 +56,23 @@ import SwiftUI
 
 // Create anchor and placement instruction entities
 let referenceAnchor = Entity()
-let placementInstructionEntity = Entity()
 
-// Initialize gesture manager with debug mode
+// Initialize gesture manager with mesh detection and debug mode
 let gestureManager = SpatialGestures.createManager(
     referenceAnchor: referenceAnchor,
-    placementInstructionEntity: placementInstructionEntity,
-    isDebugEnabled: true  // Enable debug output
+    enableMeshDetection: true, // Enable mesh detection for placement
+    showDebugVisualization: false, // Enable visualization of detected planes (optional)
+    isDebugEnabled: true, // Enable debug output
+    rotationAxis: .y // Optional: restrict rotation to y-axis
 )
 
 // Or initialize directly
 let manager = SpatialGestureManager(
     referenceAnchor: referenceAnchor,
-    placementInstructionEntity: placementInstructionEntity
+    enableMeshDetection: true,
+    showDebugVisualization: false,
+    isDebugEnabled: true,
+    rotationAxis: .y
 )
 
 // Add a 3D model entity
@@ -95,7 +97,36 @@ gestureManager.setGestureCallback { gestureInfo in
         }
     case .gestureEnded:
         print("Gesture ended: \(gestureInfo.entityName)")
+    case .placement:
+        print("Object placed: \(gestureInfo.entityName), position: \(gestureInfo.transform.translation)")
+        // Play sound or haptic feedback on placement
     }
+}
+```
+
+### Enable Mesh Detection for Placement
+
+> **Important**: Add the required privacy description to your Info.plist:
+> 
+> `NSWorldSensingUsageDescription` = "Need plane detection to place 3D objects"
+> <img src="PrivacySettings.png" width="600" alt="NSWorldSensingUsageDescription Demo">
+
+```swift
+// Start mesh detection
+Task {
+    await gestureManager.startMeshDetection(rootEntity: rootEntity)
+}
+
+// Place an entity onto a detected surface
+let success = gestureManager.placeEntity(entity: modelEntity, entityName: "robot")
+
+// Toggle debug visualization
+gestureManager.setMeshDetectionVisualization(true) // Show mesh visualization
+gestureManager.setMeshDetectionVisualization(false) // Hide mesh visualization
+
+// Stop mesh detection when no longer needed
+Task {
+    await gestureManager.stopMeshDetection()
 }
 ```
 
@@ -119,10 +150,13 @@ import SpatialGestures
 import RealityKit
 import SwiftUI
 
-struct ContentView: View {
+struct ImmersiveView: View {
     @StateObject private var gestureManager = SpatialGestures.createManager(
         referenceAnchor: Entity(),
-        isDebugEnabled: true
+        enableMeshDetection: true,
+        showDebugVisualization: false,
+        isDebugEnabled: true,
+        rotationAxis: .y
     )
     var basicEntity = Entity()
     
@@ -136,28 +170,23 @@ struct ContentView: View {
                     await gestureManager.addEntity(robotEntity, name: "Robot")
                     basicEntity.addChild(robotEntity)
                     
-                    robotEntity.position = SIMD3<Float>(-0.4, 1.4, -0.6)
+                    robotEntity.position = SIMD3<Float>(-0.2, 1.4, -0.6)
                     
                     // Set gesture callback
                     gestureManager.setGestureCallback { gestureInfo in
-                        debugViewModel.addLog(gestureInfo)
-                        
-                        // Update entity properties display
-                        if gestureInfo.entityName == "Robot" {
-                            debugViewModel.updateEntityProperties(
-                                position: gestureInfo.transform.translation,
-                                rotation: gestureInfo.transform.rotation.convertToEulerAngles(),
-                                scale: gestureInfo.transform.scale
-                            )
+                        // Handle gestures
+                        if gestureInfo.gestureType == .placement {
+                            // Play sound or provide feedback when object is placed
+                            audioPlayer?.play()
                         }
                     }
                     
-                    // Initialize entity properties
-                    debugViewModel.updateEntityProperties(
-                        position: robotEntity.position,
-                        rotation: robotEntity.orientation.convertToEulerAngles(),
-                        scale: robotEntity.scale
-                    )
+                    // Start Mesh Detection
+                    Task {
+                        await gestureManager.startMeshDetection(
+                            rootEntity: basicEntity
+                        )
+                    }
                     
                 } catch {
                     print("Failed to load Robot entity")
@@ -165,6 +194,12 @@ struct ContentView: View {
             }
         }
         .withSpatialGestures(manager: gestureManager)
+        .onDisappear {
+            Task {
+                await gestureManager.stopMeshDetection()
+                gestureManager.removeEntity(named: "Robot")
+            }
+        }
     }
 }
 ```
@@ -210,6 +245,9 @@ gestureManager.removeEntity(named: "robot")
 let (entityData, entityName) = gestureManager.findEntityData(from: interactedEntity)
 ```
 
+## Gesture Callback Information
+
+The gesture callback provides detailed information about each gesture:
 
 ```swift
 gestureManager.setGestureCallback { info in
@@ -243,7 +281,6 @@ gestureManager.setGestureCallback { info in
     }
 }
 ```
-
 
 ## Example Project
 

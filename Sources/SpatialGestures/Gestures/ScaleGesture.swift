@@ -46,8 +46,8 @@ public struct ScaleGestureViewModifier: ViewModifier {
                         let newScale = initialScale * magnification
                         
                         // Set limits to prevent objects from scaling too large or too small
-                        let minScale: Float = 0.1
-                        let maxScale: Float = 5.0
+                        let minScale: Float = 0.01
+                        let maxScale: Float = 500.0
                         
                         let clampedScale = SIMD3<Float>(
                             max(minScale, min(maxScale, newScale.x)),

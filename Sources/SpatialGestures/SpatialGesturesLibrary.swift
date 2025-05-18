@@ -4,7 +4,7 @@ import RealityKit
 /// 提供拖拽、旋转和缩放手势的库功能
 public struct SpatialGesturesLib {
     /// 库版本
-    public static let version = "1.0.0"
+    public static let version = "1.1.0"
     
     /// 快速使用所有手势的方法
     /// - Parameter manager: 空间手势管理器
@@ -25,7 +25,7 @@ public struct AllGesturesViewModifier: ViewModifier {
     public func body(content: Content) -> some View {
         content
             .onDrag(manager: manager)
-            .onScaleAndRotate(manager: manager, rotationAxis: nil)
+            .onScaleAndRotate(manager: manager, rotationAxis: manager.rotationAxis)
     }
 }
 

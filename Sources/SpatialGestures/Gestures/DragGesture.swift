@@ -9,6 +9,7 @@ public struct DragGestureViewModifier: ViewModifier {
     @State private var dragStartPosition = SIMD3<Float>.zero
     @State private var draggingEntityName: String = ""
     @State private var initialTransform: Transform?
+    @State private var canPlace: Bool = false
     
     /// Initialize the drag gesture
     /// - Parameter manager: Spatial gesture manager
@@ -77,6 +78,22 @@ public struct DragGestureViewModifier: ViewModifier {
                         let newPos = dragStartPosition + offset
                         foundEntity.setPosition(newPos, relativeTo: nil)
                         
+                        // raycast
+                        let result = value.entity.scene?.raycast(origin: foundEntity.position, direction: SIMD3<Float>(0, -1, 0))
+                        
+                        if result != nil && result?.count ?? 0 > 0 {
+                            let collison = result![0]
+                            let collisonEntity = collison.entity
+                            
+                            canPlace = manager.checkEntityPlacement(entity: foundEntity, maxDistance: 0.3, hitPosition: collison.position, hitDistance: collison.distance)
+                            if manager.isDebugEnabled {
+                                print("Can place \(entName) at current position: \(canPlace)")
+                            }
+                            
+                            // Notify placement status if callback exists
+                            manager.onPlacementStatusChanged?(entName, canPlace, foundEntity.position)
+                        }
+                        
                         // Send gesture callback
                         manager.notifyGestureEvent(SpatialGestureInfo(
                             gestureType: .drag,
@@ -115,10 +132,15 @@ public struct DragGestureViewModifier: ViewModifier {
                                 // Send transform message
                                 manager.notifyTransformChanged(draggingEntityName, relativePos)
                             }
+                            
+                            if canPlace {
+                                manager.placeEntity(entity: foundEntData.entity, entityName: draggingEntityName)
+                            }
                         }
                         
                         draggingEntityName = ""
                         initialTransform = nil
+                        canPlace = false
                     }
             )
     }

@@ -16,12 +16,10 @@ SpatialGestures 是一个为 visionOS 应用程序中的 AR 实体提供简单�
 - **拖拽**：在空间中移动 3D 对象
 - **旋转**：旋转 3D 对象（支持自定义旋转轴）
 - **缩放**：调整 3D 对象大小
+- **网格检测**：将对象放置在检测到的平面上，支持放置验证
 - **手势回调**：监控手势事件并获取变换数据
 - **调试模式**：在开发过程中获取详细的手势信息
 - **可定制旋转**：指定旋转轴或完全禁用旋转
-
-## 待办事项：
-- **平面检测**：将对象放置在检测到的平面上
 
 ## 要求
 
@@ -55,21 +53,25 @@ import SpatialGestures
 import RealityKit
 import SwiftUI
 
-// 创建锚点和放置指示实体
+// 创建锚点
 let referenceAnchor = Entity()
-let placementInstructionEntity = Entity()
 
-// 初始化手势管理器并启用调试模式
+// 初始化手势管理器，启用网格检测和调试模式
 let gestureManager = SpatialGestures.createManager(
     referenceAnchor: referenceAnchor,
-    placementInstructionEntity: placementInstructionEntity,
-    isDebugEnabled: true  // 启用调试输出
+    enableMeshDetection: true, // 启用网格检测用于放置
+    showDebugVisualization: false, // 启用检测平面可视化（可选）
+    isDebugEnabled: true, // 启用调试输出
+    rotationAxis: .y // 可选：限制旋转轴为y轴
 )
 
 // 或直接初始化
 let manager = SpatialGestureManager(
     referenceAnchor: referenceAnchor,
-    placementInstructionEntity: placementInstructionEntity
+    enableMeshDetection: true,
+    showDebugVisualization: false,
+    isDebugEnabled: true,
+    rotationAxis: .y
 )
 
 // 添加一个 3D 模型实体
@@ -94,7 +96,36 @@ gestureManager.setGestureCallback { gestureInfo in
         }
     case .gestureEnded:
         print("Gesture ended: \(gestureInfo.entityName)")
+    case .placement:
+        print("对象已放置: \(gestureInfo.entityName), 位置: \(gestureInfo.transform.translation)")
+        // 放置时播放声音或触觉反馈
     }
+}
+```
+
+### 启用网格检测用于放置
+
+> **重要提示**：在Info.plist中添加必要的隐私描述：
+> 
+> `NSWorldSensingUsageDescription` = "需要进行平面检测以放置3D对象"
+> <img src="PrivacySettings.png" width="600" alt="NSWorldSensingUsageDescription Demo">
+
+```swift
+// 启动网格检测
+Task {
+    await gestureManager.startMeshDetection(rootEntity: rootEntity)
+}
+
+// 将实体放置到检测到的平面上
+let success = gestureManager.placeEntity(entity: modelEntity, entityName: "robot")
+
+// 切换调试可视化
+gestureManager.setMeshDetectionVisualization(true) // 显示网格可视化
+gestureManager.setMeshDetectionVisualization(false) // 隐藏网格可视化
+
+// 不再需要时停止网格检测
+Task {
+    await gestureManager.stopMeshDetection()
 }
 ```
 
@@ -118,10 +149,13 @@ import SpatialGestures
 import RealityKit
 import SwiftUI
 
-struct ContentView: View {
+struct ImmersiveView: View {
     @StateObject private var gestureManager = SpatialGestures.createManager(
         referenceAnchor: Entity(),
-        isDebugEnabled: true
+        enableMeshDetection: true,
+        showDebugVisualization: false,
+        isDebugEnabled: true,
+        rotationAxis: .y
     )
     var basicEntity = Entity()
     
@@ -135,28 +169,23 @@ struct ContentView: View {
                     await gestureManager.addEntity(robotEntity, name: "Robot")
                     basicEntity.addChild(robotEntity)
                     
-                    robotEntity.position = SIMD3<Float>(-0.4, 1.4, -0.6)
+                    robotEntity.position = SIMD3<Float>(-0.2, 1.4, -0.6)
                     
                     // 设置手势回调
                     gestureManager.setGestureCallback { gestureInfo in
-                        debugViewModel.addLog(gestureInfo)
-                        
-                        // 更新实体属性显示
-                        if gestureInfo.entityName == "Robot" {
-                            debugViewModel.updateEntityProperties(
-                                position: gestureInfo.transform.translation,
-                                rotation: gestureInfo.transform.rotation.convertToEulerAngles(),
-                                scale: gestureInfo.transform.scale
-                            )
+                        // 处理手势
+                        if gestureInfo.gestureType == .placement {
+                            // 当对象放置时播放声音或提供反馈
+                            audioPlayer?.play()
                         }
                     }
                     
-                    // 初始化实体属性
-                    debugViewModel.updateEntityProperties(
-                        position: robotEntity.position,
-                        rotation: robotEntity.orientation.convertToEulerAngles(),
-                        scale: robotEntity.scale
-                    )
+                    // 启动网格检测
+                    Task {
+                        await gestureManager.startMeshDetection(
+                            rootEntity: basicEntity
+                        )
+                    }
                     
                 } catch {
                     print("加载Robot实体失败")
@@ -164,6 +193,12 @@ struct ContentView: View {
             }
         }
         .withSpatialGestures(manager: gestureManager)
+        .onDisappear {
+            Task {
+                await gestureManager.stopMeshDetection()
+                gestureManager.removeEntity(named: "Robot")
+            }
+        }
     }
 }
 ```
@@ -220,15 +255,53 @@ SpatialGestures 使用多层缓存机制提供高效的实体查找：
 
 这种多层查找机制确保手势交互拥有最佳性能，即使在复杂场景中也能保持流畅的用户体验。
 
+## 手势回调信息
+
+手势回调提供了关于每个手势的详细信息：
+
+```swift
+gestureManager.setGestureCallback { info in
+    // 手势类型
+    let gestureType = info.gestureType
+    
+    // 实体名称
+    let entityName = info.entityName
+    
+    // 当前变换
+    let transform = info.transform
+    
+    // 初始变换（开始时）
+    if let initialTransform = info.initialTransform {
+        // 计算差异
+        let translationDiff = transform.translation - initialTransform.translation
+        print("位置偏移: \(translationDiff)")
+    }
+    
+    // 特定变化值
+    if let changeValue = info.changeValue {
+        if info.gestureType == .scale {
+            // 缩放系数
+            let magnification = changeValue as! Float
+            print("缩放系数: \(magnification)")
+        } else if info.gestureType == .rotate {
+            // 旋转角度
+            let angle = changeValue as! Float
+            print("旋转角度: \(angle)")
+        }
+    }
+}
+```
+
 ## 调试输出示例
 
 当启用调试模式时，SpatialGestures 会打印详细的手势信息：
 
 ```
-😀 SpatialGesture Debug: [DRAG] Entity: robot Position: SIMD3<Float>(0.1, 0.5, -0.2) Offset: SIMD3<Float>(0.05, 0.0, -0.1)
-😀 SpatialGesture Debug: [ROTATE] Entity: robot Rotation: SIMD3<Float>(0.0, 0.5, 0.0) Angle: 0.5
-😀 SpatialGesture Debug: [SCALE] Entity: robot Scale: SIMD3<Float>(1.5, 1.5, 1.5) Magnification: 1.5
-😀 SpatialGesture Debug: [GESTURE_END] Entity: robot Final Position: SIMD3<Float>(0.1, 0.5, -0.2) Rotation: SIMD3<Float>(0.0, 0.5, 0.0) Scale: SIMD3<Float>(1.5, 1.5, 1.5)
+😀 SpatialGesture Debug: [Drag] Entity: robot position: SIMD3<Float>(0.1, 0.5, -0.2) offset: SIMD3<Float>(0.05, 0.0, -0.1)
+😀 SpatialGesture Debug: [Rotate] Entity: robot rotation: SIMD3<Float>(0.0, 0.5, 0.0) angle: 0.5
+😀 SpatialGesture Debug: [Magnify] Entity: robot scale: SIMD3<Float>(1.5, 1.5, 1.5) magnification: 1.5
+😀 SpatialGesture Debug: [Gesture Ended] Entity: robot position: SIMD3<Float>(0.1, 0.5, -0.2) rotation: SIMD3<Float>(0.0, 0.5, 0.0) scale: SIMD3<Float>(1.5, 1.5, 1.5)
+😀 SpatialGesture Debug: [Placement] Entity: robot position: SIMD3<Float>(0.1, 1.0, -0.5)
 ```
 
 ## 示例项目

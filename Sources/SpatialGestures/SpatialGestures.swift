@@ -8,20 +8,26 @@ import RealityKit
 /// 包括拖拽、旋转和缩放功能
 public struct SpatialGestures {
     /// 包版本
-    public static let version = "1.0.0"
+    public static let version = "1.1.0"
     
     /// 初始化并创建一个空间手势管理器
     /// - Parameters:
     ///   - referenceAnchor: 可选的参考锚点
     ///   - isDebugEnabled: 是否启用调试模式，默认为false
     /// - Returns: 空间手势管理器实例
-    public static func createManager(
+    @MainActor public static func createManager(
         referenceAnchor: Entity? = nil,
-        isDebugEnabled: Bool = false
+        enableMeshDetection: Bool = false,
+        showDebugVisualization: Bool = false,
+        isDebugEnabled: Bool = false,
+        rotationAxis: RotationAxis3D? = nil
     ) -> SpatialGestureManager {
         return SpatialGestureManager(
             referenceAnchor: referenceAnchor,
-            isDebugEnabled: isDebugEnabled
+            enableMeshDetection: enableMeshDetection,
+            showDebugVisualization: showDebugVisualization,
+            isDebugEnabled: isDebugEnabled,
+            rotationAxis: rotationAxis
         )
     }
     

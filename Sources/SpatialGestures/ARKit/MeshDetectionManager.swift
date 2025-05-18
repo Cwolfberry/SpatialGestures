@@ -61,10 +61,8 @@ public class MeshDetectionManager: ObservableObject {
         
         placementInstructionEntity = ModelEntity(components: [modelComponent])
         placementInstructionEntity?.name = "PlacementIndicator"
-        placementInstructionEntity?.isEnabled = true
-        
-        placementInstructionEntity?.setPosition(SIMD3<Float>(0, 1.5, -1), relativeTo: nil)
-        
+        placementInstructionEntity?.isEnabled = false
+                
         rootEntity.addChild(placementInstructionEntity!)
     }
     
